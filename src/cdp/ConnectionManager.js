@@ -384,11 +384,16 @@ class ConnectionManager {
             // Inject MutationObserver payload
             const result = await this._injectObserver(sessionId);
 
-            if (result === 'not-agent-panel') {
-                this.log(`[CDP] [${shortId}] Not an agent panel, detaching`);
+            // Whitelist: only keep sessions where injection definitively succeeded
+            if (result !== 'observer-installed' && result !== 'already-active') {
+                this.log(`[CDP] [${shortId}] Injection failed (${result}), detaching`);
                 await this._send('Target.detachFromTarget', { sessionId })
                     .catch(e => this.log(`[CDP] [${shortId}] Detach failed: ${e.message}`));
-                this.ignoredTargets.add(targetId);
+                // Only permanently blacklist if definitively the wrong context.
+                // Transient failures (undefined) remain eligible for rediscovery.
+                if (result === 'not-agent-panel') {
+                    this.ignoredTargets.add(targetId);
+                }
                 return;
             }
 
@@ -573,9 +578,33 @@ class ConnectionManager {
                         } catch (e) { /* context may be gone — safe to ignore */ }
                         try {
                             const result = await this._injectObserver(sessionId);
-                            this.log(`[CDP] ✓ Heartbeat re-injected [${shortId}] → ${result}`);
+                            // Fast-fail: context changed to non-agent-panel — evict immediately
+                            if (result === 'not-agent-panel') {
+                                deadSessions.push({ targetId, sessionId });
+                                this._sessionFailCounts.delete(targetId);
+                                this.ignoredTargets.add(targetId);
+                                this.log(`[CDP] Session [${shortId}] is no longer agent panel, evicting`);
+                            } else if (result !== 'observer-installed' && result !== 'already-active') {
+                                // Soft failure (undefined, script error) — count toward pruning
+                                const failCount = (this._sessionFailCounts.get(targetId) || 0) + 1;
+                                this._sessionFailCounts.set(targetId, failCount);
+                                this.log(`[CDP] Re-inject [${shortId}] → ${result} (fail ${failCount}/3)`);
+                                if (failCount >= 3) {
+                                    deadSessions.push({ targetId, sessionId });
+                                    this._sessionFailCounts.delete(targetId);
+                                }
+                            } else {
+                                this._sessionFailCounts.delete(targetId);
+                                this.log(`[CDP] ✓ Heartbeat re-injected [${shortId}] → ${result}`);
+                            }
                         } catch (e) {
-                            this.log(`[CDP] Heartbeat re-inject failed [${shortId}]: ${e.message}`);
+                            const failCount = (this._sessionFailCounts.get(targetId) || 0) + 1;
+                            this._sessionFailCounts.set(targetId, failCount);
+                            this.log(`[CDP] Heartbeat re-inject exception [${shortId}]: ${e.message} (fail ${failCount}/3)`);
+                            if (failCount >= 3) {
+                                deadSessions.push({ targetId, sessionId });
+                                this._sessionFailCounts.delete(targetId);
+                            }
                         }
                     }
                 } else {

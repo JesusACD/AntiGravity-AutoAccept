@@ -368,8 +368,26 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
 
         observer.observe(document.body, {
             childList: true,
-        subtree: true
-    });
+        subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'style', 'hidden', 'aria-expanded', 'data-state']
+        });
+
+        // Failsafe: periodic scan for buttons that bypass MutationObserver
+        // (e.g. CSS visibility toggles, React virtual DOM anomalies).
+        // Uses requestIdleCallback to avoid blocking the main thread.
+        // Clear any existing interval to prevent duplicates on re-injection.
+        if (window.__AA_FALLBACK_INTERVAL) {
+            clearInterval(window.__AA_FALLBACK_INTERVAL);
+        }
+        window.__AA_FALLBACK_INTERVAL = setInterval(function() {
+            if (window.__AA_PAUSED) return;
+            if ('requestIdleCallback' in window) {
+                requestIdleCallback(function() { scanAndClick(); }, { timeout: 2000 });
+            } else {
+                setTimeout(function() { scanAndClick(); }, 0);
+            }
+        }, 10000);
 
         // Expose observer on window for external disconnect (kill switch)
         window.__AA_OBSERVER = observer;

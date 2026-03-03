@@ -98,7 +98,7 @@ alias antigravity='antigravity --remote-debugging-port=9333'
 **Manual:**
 1. Copy the `src/` directory, `package.json`, and `package-lock.json` to:
    ```
-   ~/.antigravity/extensions/YazanBaker.antigravity-autoaccept-3.3.0/
+   ~/.antigravity/extensions/YazanBaker.antigravity-autoaccept-3.4.0/
    ```
 2. Run `npm install` in that directory (installs `ws` dependency)
 3. Reload Window
