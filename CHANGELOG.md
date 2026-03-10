@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.7.8] — 2026-03-10
+
+### Bug Fixes
+- **Fixed** Accept button not being auto-clicked. Antigravity renders buttons like `<button>Accept<kbd>Alt+⏎</kbd></button>` where `textContent` concatenates to `"AcceptAlt+⏎"` (no space). The word boundary check treated `'a'` (from `Alt`) as a continuation of the keyword, silently skipping the match. Added keyboard shortcut suffix detection (`alt|ctrl|shift|cmd|meta`) as a fourth matching condition.
+- **Fixed** Expand all / Collapse all infinite toggle loop. The `'expand'` keyword matched `"Expand all"` via `startsWith`, clicking it every 5s. On click, it toggled to "Collapse all" (triggering a DOM mutation), then back — creating an infinite cycle. Expand keywords now require **exact text match only**.
+- **Removed** permanent `expandedOnce` session-lifetime suppression for expand buttons. Replaced with a 30s DOM-path-keyed cooldown that allows the same expand button to be re-clicked after the window expires.
+
+### Diagnostics
+- **Improved** heartbeat diagnostic output: `SKIP_DISABLED`, `SKIP_COOLDOWN`, and `CLICKED` events now display with type-specific formatting instead of a generic fallback that showed `undefined` fields.
+- **Fixed** cooldown pruning: `maxAge` now uses `EXPAND_COOLDOWN_MS * 2` (60s) instead of the stale `COOLDOWN_MS * 3` (15s), preventing premature eviction of expand button cooldown entries.
+
+---
+
 ## [3.0.0] — 2026-02-28
 
 ### Architecture: Event-Driven CDP (Zero-Polling)

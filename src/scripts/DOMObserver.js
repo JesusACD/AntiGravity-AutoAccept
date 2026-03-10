@@ -87,9 +87,8 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
     }
 
     var COOLDOWN_MS = 5000;
-    var EXPAND_COOLDOWN_MS = 15000; // 15s cooldown for expand buttons (DOM-path-keyed, so new positions fire instantly)
+    var EXPAND_COOLDOWN_MS = 30000; // 30s cooldown for expand buttons (DOM-path-keyed, so new positions fire instantly)
     var clickCooldowns = {};
-    var expandedOnce = {}; // Permanent suppression for expand buttons within this session
 
     // Lightweight DOM path: walks up to 3 ancestors to create a structurally unique key.
     // Differentiates multiple "Accept" buttons in different DOM subtrees.
@@ -176,9 +175,21 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                 // Skip keywords lower priority than current best
                 if (best !== null && t >= best.priority) break;
                 var text = texts[t];
-                var isMatch = nodeText === text ||
-                    (text.length >= 5 && nodeText.startsWith(text) && isWordBoundary(nodeText, text.length) && nodeText.length <= text.length * 3) ||
-                    (nodeText.startsWith(text + ' ') && nodeText.length <= text.length * 5);
+                // Expand keywords: exact match ONLY to prevent toggle loops
+                // ('Expand all' → click → 'Collapse all' → mutation → 'Expand all' → click → ∞)
+                var isExpandKeyword = (text === 'expand' || text === 'requires input');
+                var isMatch;
+                if (isExpandKeyword) {
+                    isMatch = nodeText === text;
+                } else {
+                    isMatch = nodeText === text ||
+                        (text.length >= 5 && nodeText.startsWith(text) && isWordBoundary(nodeText, text.length) && nodeText.length <= text.length * 3) ||
+                        (nodeText.startsWith(text + ' ') && nodeText.length <= text.length * 5) ||
+                        // Keyboard shortcut suffix: Antigravity renders "AcceptAlt+⏎" with no space.
+                        // The word boundary check fails because 'a' (from 'alt') is a word char.
+                        (text.length >= 5 && nodeText.startsWith(text) && nodeText.length <= text.length * 5 &&
+                            /^(alt|ctrl|shift|cmd|meta|⌘|⌥|⇧|⌃)/.test(nodeText.substring(text.length)));
+                }
                 if (!isMatch) continue;
 
                 var clickable = closestClickable(wNode);
@@ -192,15 +203,9 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                     if (clickable.disabled || clickable.getAttribute('aria-disabled') === 'true' ||
                         clickable.classList.contains('loading') || clickable.querySelector('.codicon-loading') ||
                         clickable.getAttribute('data-aa-blocked')) {
+                        if (!window.__AA_DIAG) window.__AA_DIAG = [];
+                        window.__AA_DIAG.push({ action: 'SKIP_DISABLED', matched: text, text: nodeText.substring(0, 40), tag: tag2 });
                         continue;
-                    }
-
-                    // Expand-once guard: permanently suppress re-clicks at the SAME DOM position
-                    if (isExpandType) {
-                        var expandKey = _domPath(clickable) + ':expand:' + (clickable.textContent || '').trim().toLowerCase().substring(0, 30);
-                        if (expandedOnce[expandKey]) {
-                            continue;
-                        }
                     }
 
                     // Cooldown guard: DOM-path + text key, with longer cooldown for expand buttons
@@ -208,6 +213,8 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                     var cooldown = isExpandType ? EXPAND_COOLDOWN_MS : COOLDOWN_MS;
                     var lastClick = clickCooldowns[btnKey] || 0;
                     if (lastClick && (Date.now() - lastClick < cooldown)) {
+                        if (!window.__AA_DIAG) window.__AA_DIAG = [];
+                        window.__AA_DIAG.push({ action: 'SKIP_COOLDOWN', matched: text, remaining: Math.round((cooldown - (Date.now() - lastClick)) / 1000) + 's' });
                         continue;
                     }
                     best = { node: clickable, matchedText: text, priority: t };
@@ -227,7 +234,7 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
         var now = Date.now();
         if (now - lastPrune < PRUNE_INTERVAL_MS) return;
         lastPrune = now;
-        var maxAge = COOLDOWN_MS * 3;
+        var maxAge = EXPAND_COOLDOWN_MS * 2;
         var keys = Object.keys(clickCooldowns);
         for (var i = 0; i < keys.length; i++) {
             if (now - clickCooldowns[keys[i]] > maxAge) {
@@ -428,8 +435,8 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                 // Record cooldown and click
                 var isExpandMatch = (matchedText === 'expand' || matchedText === 'requires input');
                 if (isExpandMatch) {
-                    var expandKey = _domPath(btn) + ':expand:' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
-                    expandedOnce[expandKey] = true;
+                    var expandCdKey = _domPath(btn) + ':expand:' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
+                    clickCooldowns[expandCdKey] = Date.now();
                 } else {
                     var key = _domPath(btn) + ':' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
                     clickCooldowns[key] = Date.now();

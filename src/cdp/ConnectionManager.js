@@ -652,8 +652,14 @@ class ConnectionManager {
                                 this.log(`[DIAG] [${shortId}] BLOCKED | matched=${d.matched} | cmd=${d.cmd || 'N/A'}`);
                             } else if (d.action === 'CIRCUIT_BREAKER') {
                                 this.log(`[DIAG] [${shortId}] ⚠️ CIRCUIT BREAKER | matched=${d.matched} | retries=${d.count} in 60s — auto-retry paused`);
+                            } else if (d.action === 'SKIP_DISABLED') {
+                                this.log(`[DIAG] [${shortId}] SKIP_DISABLED | matched=${d.matched} | tag=${d.tag || '?'} | text=${d.text || ''}`);
+                            } else if (d.action === 'SKIP_COOLDOWN') {
+                                this.log(`[DIAG] [${shortId}] SKIP_COOLDOWN | matched=${d.matched} | remaining=${d.remaining || '?'}`);
+                            } else if (d.action === 'CLICKED') {
+                                this.log(`[DIAG] [${shortId}] CLICKED | matched=${d.matched} | cmd=${d.cmd || 'N/A'} | url=${d.url || 'N/A'} | near=${(d.near || '').substring(0, 60)}`);
                             } else {
-                                this.log(`[DIAG] [${shortId}] ${d.action} | matched=${d.matched} | cmd=${d.cmd || 'N/A'} | url=${d.url || 'N/A'} | near=${d.near || ''}`);
+                                this.log(`[DIAG] [${shortId}] ${d.action} | ${JSON.stringify(d).substring(0, 100)}`);
                             }
                         }
                     }
