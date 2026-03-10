@@ -1,4 +1,4 @@
-// AntiGravity AutoAccept — DOM Observer Payload
+// AntiGravity AutoAccept — DOM Observer Payload (v3.5.7)
 // Generates a self-contained script injected ONCE per CDP session.
 // Uses MutationObserver for zero-polling, event-driven button clicking.
 // All cooldown state is localized to DOM data-attributes — no Node.js globals.
@@ -76,9 +76,20 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
     window.__AA_HAS_FILTERS = HAS_FILTERS;
     window.__AA_PAUSED = false; // Kill switch: set to true to stop all clicking
 
+    // ═══ DEBUG LOGGING ═══
+    // All logs prefixed with [AA] for easy filtering in DevTools.
+    var DEBUG = true;
+    function _log() {
+        if (!DEBUG) return;
+        var args = ['[AA]'];
+        for (var i = 0; i < arguments.length; i++) args.push(arguments[i]);
+        console.log.apply(console, args);
+    }
+
     var COOLDOWN_MS = 5000;
     var EXPAND_COOLDOWN_MS = 15000; // 15s cooldown for expand buttons (DOM-path-keyed, so new positions fire instantly)
     var clickCooldowns = {};
+    var expandedOnce = {}; // Permanent suppression for expand buttons within this session
 
     // Lightweight DOM path: walks up to 3 ancestors to create a structurally unique key.
     // Differentiates multiple "Accept" buttons in different DOM subtrees.
@@ -179,8 +190,17 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                     clickable.onclick || clickable.getAttribute('tabindex') === '0') {
                     // Idempotency guard: skip disabled/loading buttons
                     if (clickable.disabled || clickable.getAttribute('aria-disabled') === 'true' ||
-                        clickable.classList.contains('loading') || clickable.querySelector('.codicon-loading')) {
+                        clickable.classList.contains('loading') || clickable.querySelector('.codicon-loading') ||
+                        clickable.getAttribute('data-aa-blocked')) {
                         continue;
+                    }
+
+                    // Expand-once guard: permanently suppress re-clicks at the SAME DOM position
+                    if (isExpandType) {
+                        var expandKey = _domPath(clickable) + ':expand:' + (clickable.textContent || '').trim().toLowerCase().substring(0, 30);
+                        if (expandedOnce[expandKey]) {
+                            continue;
+                        }
                     }
 
                     // Cooldown guard: DOM-path + text key, with longer cooldown for expand buttons
@@ -222,6 +242,10 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
 
     /**
      * Walks up the DOM from a button to find the nearest command preview.
+     * Uses querySelectorAll to collect ALL <pre> and <code> texts at each
+     * parent level — querySelector only returns the first match, which in
+     * Antigravity's UI is often an inline <code> with the terminal path,
+     * not the actual command.
      */
     function extractCommandText(btn) {
         try {
@@ -229,10 +253,14 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
             for (var i = 0; i < 8 && el && el !== document.body; i++) {
                 el = el.parentElement;
                 if (!el) break;
-                var code = el.querySelector('pre') || el.querySelector('code');
-                if (code) {
-                    var text = (code.textContent || '').trim();
-                    if (text.length > 0) return text;
+                var codes = el.querySelectorAll('pre, code');
+                if (codes.length > 0) {
+                    var allText = '';
+                    for (var j = 0; j < codes.length; j++) {
+                        allText += ' ' + (codes[j].textContent || '').trim();
+                    }
+                    allText = allText.trim();
+                    if (allText.length > 0) return allText;
                 }
             }
         } catch (e) { /* fail closed — return null */ }
@@ -314,38 +342,110 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
 
             // Single-pass: combine all keywords and walk the DOM exactly once
             var allTexts = BUTTON_TEXTS.concat(EXPAND_TEXTS);
-            var match = findButton(document.body, allTexts);
-            if (!match) return null;
 
-            var btn = match.node;
-            var matchedText = match.matchedText;
-
-            // Command filtering: only applies to terminal-related buttons
+            // Diagnostic: record filter state for heartbeat readout
             var currentHasFilters = window.__AA_HAS_FILTERS !== undefined ? window.__AA_HAS_FILTERS : HAS_FILTERS;
-            if (currentHasFilters && TERMINAL_BUTTON_TEXTS.indexOf(matchedText) !== -1) {
+            var currentBlocked = window.__AA_BLOCKED || BLOCKED_COMMANDS;
+
+            // Loop: when a button is blocked by filters, re-scan to find the next one.
+            var MAX_SCANS = 5;
+            for (var scan = 0; scan < MAX_SCANS; scan++) {
+                var match = findButton(document.body, allTexts);
+                if (!match) return null;
+
+                var btn = match.node;
+                var matchedText = match.matchedText;
+
+            // Command filtering: applies to command-execution buttons near code blocks.
+            // Skip expand/preview buttons — they're UI chrome that toggles collapsed
+            // content, not terminal command executors. Filtering them causes false
+            // positives when nearby chat text contains blocked words (e.g., discussing
+            // "echo" in conversation), which cascades to hide the actual Run button.
+            var isExpandBtn = (matchedText === 'expand' || matchedText === 'requires input');
+            if (currentHasFilters && !isExpandBtn) {
                 var cmdText = extractCommandText(btn);
-                if (!isCommandAllowed(cmdText)) {
-                    return null; // Blocked by filter
+                if (cmdText !== null) {
+                    // Terminal command detected — apply blocklist/allowlist filter
+                    if (!isCommandAllowed(cmdText)) {
+                        // Stamp the DOM element itself — shared across all JS contexts.
+                        // JS-variable cooldowns are isolated per CDP session scope,
+                        // but data attributes live on the DOM and are visible to all observers.
+                        btn.setAttribute('data-aa-blocked', 'true');
+                        // Visual block indicator — immediate UX feedback
+                        btn.style.cssText += ';background:#4a1c1c !important;opacity:0.6;cursor:not-allowed;';
+                        btn.textContent = '🚫 Blocked by Filter';
+                        var blockKey = _domPath(btn) + ':' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
+                        clickCooldowns[blockKey] = Date.now() + (15000 - COOLDOWN_MS);
+                        if (!window.__AA_DIAG) window.__AA_DIAG = [];
+                        window.__AA_DIAG.push({ action: 'BLOCKED', time: Date.now(), matched: matchedText, cmd: (cmdText || '').substring(0, 60) });
+                        continue; // Re-scan to find next button
+                    }
                 }
             }
 
-            // Record cooldown and click
-            var isExpandMatch = (matchedText === 'expand' || matchedText === 'requires input');
-            if (isExpandMatch) {
-                var expandKey = 'expand:' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
-                expandedOnce[expandKey] = true; // Permanently suppress re-clicks for this session
-            } else {
-                var key = _domPath(btn) + ':' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
-                clickCooldowns[key] = Date.now();
+                // Diagnostic: record click with DOM context for debugging
+                var parentChain = '';
+                var nearbyText = '';
+                try {
+                    var p = btn;
+                    for (var pi = 0; pi < 5 && p; pi++) {
+                        p = p.parentElement;
+                        if (p) parentChain += (p.tagName || '?') + (p.className ? '.' + (p.className + '').substring(0, 30) : '') + ' > ';
+                    }
+                    // Look for any text in nearby siblings or parent's textContent
+                    var parentEl = btn.parentElement;
+                    if (parentEl && parentEl.parentElement) nearbyText = (parentEl.parentElement.textContent || '').trim().substring(0, 100);
+                } catch(e) {}
+                if (!window.__AA_DIAG) window.__AA_DIAG = [];
+                var diagCmdText = extractCommandText(btn);
+                window.__AA_DIAG.push({ action: 'CLICKED', time: Date.now(), matched: matchedText, cmd: diagCmdText ? diagCmdText.substring(0, 80) : 'NULL', url: (location.href || '').substring(0, 60), near: nearbyText.substring(0, 60) });
+
+                // ═══ RETRY CIRCUIT BREAKER ═══
+                // Prevents infinite loops when the model hits context limits or network
+                // errors. "Retry" and "Continue" buttons are auto-clicked up to 3 times
+                // per 60-second window. After that, the extension stops and hands control
+                // back to the user. The counter resets when a successful non-recovery
+                // click occurs (run/accept = error resolved).
+                var isRecovery = matchedText === 'retry' || matchedText === 'continue';
+                if (isRecovery) {
+                    window.__AA_RECOVERY_TS = window.__AA_RECOVERY_TS || [];
+                    var now = Date.now();
+                    // Keep only timestamps from the last 60 seconds
+                    window.__AA_RECOVERY_TS = window.__AA_RECOVERY_TS.filter(function(ts) {
+                        return now - ts < 60000;
+                    });
+                    if (window.__AA_RECOVERY_TS.length >= 3) {
+                        if (!window.__AA_DIAG) window.__AA_DIAG = [];
+                        window.__AA_DIAG.push({ action: 'CIRCUIT_BREAKER', time: now, matched: matchedText, count: window.__AA_RECOVERY_TS.length });
+                        return 'blocked:circuit_breaker';
+                    }
+                    window.__AA_RECOVERY_TS.push(now);
+                } else {
+                    // Successful non-recovery click — error is resolved, reset retry counter
+                    window.__AA_RECOVERY_TS = [];
+                }
+
+                // Record cooldown and click
+                var isExpandMatch = (matchedText === 'expand' || matchedText === 'requires input');
+                if (isExpandMatch) {
+                    var expandKey = _domPath(btn) + ':expand:' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
+                    expandedOnce[expandKey] = true;
+                } else {
+                    var key = _domPath(btn) + ':' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
+                    clickCooldowns[key] = Date.now();
+                }
+                _log('clicking:', matchedText, '| node:', btn.tagName, '| text:', (btn.textContent || '').trim().substring(0, 40));
+                btn.click();
+                window.__AA_CLICK_COUNT = (window.__AA_CLICK_COUNT || 0) + 1;
+                return 'clicked:' + matchedText;
             }
-            btn.click();
-            window.__AA_CLICK_COUNT = (window.__AA_CLICK_COUNT || 0) + 1;
-            return 'clicked:' + matchedText;
+            return null; // All found buttons were blocked
         }
 
         // ═══ INITIAL SCAN ═══
         // Click any buttons already present in the DOM right now.
-        scanAndClick();
+        // Wrapped in try/catch so a crash here cannot kill observer setup.
+        try { scanAndClick(); } catch(e) { _log('initial scan error:', e.message); }
 
         // ═══ MUTATION OBSERVER ═══
         // Zero-polling, event-driven: reacts when React mounts new elements.
@@ -364,6 +464,8 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
             setTimeout(function() {
                 try {
                     scanAndClick();
+                } catch(e) {
+                    _log('scan error:', e.message);
                 } finally {
                     __AA_SCAN_QUEUED = false;
                 }

@@ -119,6 +119,14 @@ class DashboardProvider {
     async _handleMessage(msg) {
         // Hoist config to top — accessible to all cases (avoids ReferenceError)
         const config = vscode.workspace.getConfiguration('autoAcceptV2');
+        // Write at the highest active scope: if the user has a workspace override, write there;
+        // otherwise write to Global (user settings). Fixes Issue #33 where workspace-level
+        // values silently override Global writes, making toggles appear stuck.
+        const _target = (key) => {
+            const info = config.inspect(key);
+            if (info && info.workspaceValue !== undefined) return vscode.ConfigurationTarget.Workspace;
+            return vscode.ConfigurationTarget.Global;
+        };
         switch (msg.type) {
             case 'ready':
                 // Webview DOM is loaded — safe to push initial state
@@ -128,7 +136,7 @@ class DashboardProvider {
                 vscode.commands.executeCommand('autoAcceptV2.toggle');
                 break;
             case 'updateConfig': {
-                await config.update(msg.key, msg.value, vscode.ConfigurationTarget.Global);
+                await config.update(msg.key, msg.value, _target(msg.key));
                 this._pushState();
                 break;
             }
@@ -136,14 +144,14 @@ class DashboardProvider {
                 const list = [...config.get('blockedCommands', [])];
                 if (msg.value && !list.includes(msg.value)) {
                     list.push(msg.value);
-                    await config.update('blockedCommands', list, vscode.ConfigurationTarget.Global);
+                    await config.update('blockedCommands', list, _target('blockedCommands'));
                 }
                 this._pushState();
                 break;
             }
             case 'removeBlocked': {
                 const list = config.get('blockedCommands', []).filter(c => c !== msg.value);
-                await config.update('blockedCommands', list, vscode.ConfigurationTarget.Global);
+                await config.update('blockedCommands', list, _target('blockedCommands'));
                 this._pushState();
                 break;
             }
@@ -151,14 +159,14 @@ class DashboardProvider {
                 const list = [...config.get('allowedCommands', [])];
                 if (msg.value && !list.includes(msg.value)) {
                     list.push(msg.value);
-                    await config.update('allowedCommands', list, vscode.ConfigurationTarget.Global);
+                    await config.update('allowedCommands', list, _target('allowedCommands'));
                 }
                 this._pushState();
                 break;
             }
             case 'removeAllowed': {
                 const list = config.get('allowedCommands', []).filter(c => c !== msg.value);
-                await config.update('allowedCommands', list, vscode.ConfigurationTarget.Global);
+                await config.update('allowedCommands', list, _target('allowedCommands'));
                 this._pushState();
                 break;
             }

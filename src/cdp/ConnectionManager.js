@@ -24,6 +24,8 @@ class ConnectionManager {
         this.msgId = 0;
         this.pending = new Map();           // id → { resolve, reject, timer }
         this.sessions = new Map();          // targetId → sessionId
+        this.sessionUrls = new Map();       // targetId → url (for URL-based dedup)
+        this.pendingUrls = new Set();       // URLs currently being attached (TOCTOU lock)
         this.ignoredTargets = new Set();    // targetIds rejected (no-dom, not-agent-panel)
         this.activeCdpPort = null;
 
@@ -172,6 +174,8 @@ class ConnectionManager {
         this._disableObservers();
         this._closeWebSocket();
         this.sessions.clear();
+        this.sessionUrls.clear();
+        this.pendingUrls.clear();
         this.ignoredTargets.clear();
         this._sessionFailCounts.clear();
         this._clearPending();
@@ -301,6 +305,8 @@ class ConnectionManager {
         try {
             this.ws = null;
             this.sessions.clear();
+            this.sessionUrls.clear();
+            this.pendingUrls.clear();
             this.ignoredTargets.clear();
             this._sessionFailCounts.clear();
             this._clearPending();
@@ -358,6 +364,18 @@ class ConnectionManager {
         }
         if (this.ignoredTargets.has(targetId)) {
             return;
+        }
+
+        // URL-based deduplication: skip targets that share a URL with an existing session.
+        if (url) {
+            for (const [existingTid] of this.sessions) {
+                const existingUrl = this.sessionUrls.get(existingTid);
+                if (existingUrl && existingUrl === url) {
+                    this.log(`[CDP] [${shortId}] Skipping — URL already covered by session ${existingTid.substring(0, 6)}`);
+                    this.ignoredTargets.add(targetId);
+                    return;
+                }
+            }
         }
 
         try {
@@ -425,6 +443,7 @@ class ConnectionManager {
 
             // Keep session alive in pool
             this.sessions.set(targetId, sessionId);
+            this.sessionUrls.set(targetId, url || '');
             this.log(`[CDP] ✓ Attached [${shortId}] → ${result} (${(url || '').substring(0, 50)})`);
 
             // If extension is currently paused, immediately pause this new session
@@ -435,12 +454,15 @@ class ConnectionManager {
             }
         } catch (e) {
             this.log(`[CDP] [${shortId}] Attach error: ${e.message}`);
+        } finally {
+            if (url) this.pendingUrls.delete(url);
         }
     }
 
     _handleTargetDestroyed(targetId) {
         if (this.sessions.has(targetId)) {
             this.sessions.delete(targetId);
+            this.sessionUrls.delete(targetId);
             this.log(`[CDP] Target destroyed [${targetId.substring(0, 6)}]`);
         }
         // Clean up all caches to prevent memory leak over long sessions
@@ -453,6 +475,7 @@ class ConnectionManager {
         for (const [tid, sid] of this.sessions) {
             if (sid === sessionId) {
                 this.sessions.delete(tid);
+                this.sessionUrls.delete(tid);
                 this._sessionFailCounts.delete(tid);
                 this.log(`[CDP] Session detached [${tid.substring(0, 6)}]`);
                 break;
@@ -596,14 +619,13 @@ class ConnectionManager {
             const sessionEntries = [...this.sessions.entries()];
             const healthResults = await Promise.allSettled(
                 sessionEntries.map(async ([targetId, sessionId]) => {
-                    // Atomic consume-and-reset: IIFE reads click count AND resets to 0
-                    // in a single JS turn (thread-safe). Eliminates page-reload data loss.
+                    // Atomic consume-and-reset: IIFE reads click count, diag, AND resets
                     const check = await this._send('Runtime.evaluate', {
-                        expression: '(() => { const c = window.__AA_CLICK_COUNT || 0; window.__AA_CLICK_COUNT = 0; return { alive: !!window.__AA_PAUSED || (!!window.__AA_OBSERVER_ACTIVE && (Date.now() - (window.__AA_LAST_SCAN || 0)) < 120000), clickCount: c }; })()',
+                        expression: '(() => { const c = window.__AA_CLICK_COUNT || 0; window.__AA_CLICK_COUNT = 0; const d = window.__AA_DIAG || []; window.__AA_DIAG = []; return { alive: !!window.__AA_PAUSED || (!!window.__AA_OBSERVER_ACTIVE && (Date.now() - (window.__AA_LAST_SCAN || 0)) < 120000), clickCount: c, diag: d }; })()',
                         returnByValue: true
                     }, sessionId);
-                    const health = check.result?.result?.value || { alive: false, clickCount: 0 };
-                    return { targetId, sessionId, alive: health.alive, clickCount: health.clickCount };
+                    const health = check.result?.result?.value || { alive: false, clickCount: 0, diag: null };
+                    return { targetId, sessionId, alive: health.alive, clickCount: health.clickCount, diag: health.diag };
                 })
             );
 
@@ -621,6 +643,19 @@ class ConnectionManager {
                     // Harvest click telemetry from consume-and-reset
                     if (this.onClickTelemetry && value.clickCount > 0) {
                         this.onClickTelemetry(value.clickCount);
+                    }
+
+                    // Surface observer diagnostics in output panel
+                    if (value.diag && Array.isArray(value.diag) && value.diag.length > 0) {
+                        for (const d of value.diag) {
+                            if (d.action === 'BLOCKED') {
+                                this.log(`[DIAG] [${shortId}] BLOCKED | matched=${d.matched} | cmd=${d.cmd || 'N/A'}`);
+                            } else if (d.action === 'CIRCUIT_BREAKER') {
+                                this.log(`[DIAG] [${shortId}] ⚠️ CIRCUIT BREAKER | matched=${d.matched} | retries=${d.count} in 60s — auto-retry paused`);
+                            } else {
+                                this.log(`[DIAG] [${shortId}] ${d.action} | matched=${d.matched} | cmd=${d.cmd || 'N/A'} | url=${d.url || 'N/A'} | near=${d.near || ''}`);
+                            }
+                        }
                     }
 
                     if (!value.alive) {

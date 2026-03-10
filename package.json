@@ -2,7 +2,7 @@
     "name": "antigravity-autoaccept",
     "displayName": "AntiGravity AutoAccept",
     "description": "Auto-accept Run, Accept, and Always Allow buttons in Antigravity via CDP with Webview Guard isolation.",
-    "version": "3.5.3",
+    "version": "3.7.4",
     "publisher": "YazanBaker",
     "icon": "images/icon.png",
     "engines": {
@@ -78,19 +78,20 @@
         }
     },
     "scripts": {
+        "package": "npx -y @vscode/vsce package",
         "test": "echo \"Error: no test specified\" && exit 1"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/ai-dev-2024/AUTO-ALL-AntiGravity.git"
+        "url": "git+https://github.com/yazanbaker94/AntiGravity-AutoAccept.git"
     },
     "keywords": [],
     "author": "",
     "license": "ISC",
     "bugs": {
-        "url": "https://github.com/ai-dev-2024/AUTO-ALL-AntiGravity/issues"
+        "url": "https://github.com/yazanbaker94/AntiGravity-AutoAccept/issues"
     },
-    "homepage": "https://github.com/ai-dev-2024/AUTO-ALL-AntiGravity#readme",
+    "homepage": "https://github.com/yazanbaker94/AntiGravity-AutoAccept#readme",
     "dependencies": {
         "ws": "^8.19.0"
     }

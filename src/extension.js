@@ -25,6 +25,7 @@ const ALL_ACCEPT_COMMANDS = [
 const TERMINAL_COMMANDS = [
     'antigravity.terminalCommand.accept',
     'antigravity.terminalCommand.run',
+    'antigravity.command.accept',  // Generic acceptor — also fires terminal commands blindly
 ];
 
 // Conservative estimate: each manual click = review + find button + click ≈ 3s
@@ -68,6 +69,7 @@ function refreshConfig() {
     cachedBlockedCommands = newBlocked;
     cachedAllowedCommands = newAllowed;
     cachedHasFilters = newHasFilters;
+    log(`[Config] hasFilters=${cachedHasFilters}, blocked=[${newBlocked.join(',')}], fileEdits=${newFileEdits}`);
 
     // Hot-reload: push updated config to live CDP sessions
     if (connectionManager) {
@@ -84,16 +86,20 @@ function refreshConfig() {
 
 /**
  * Builds the command list from cached config (no I/O per tick).
+ * When command filters are active, Channel 1 is FULLY disabled.
+ * ALL accept commands fire blindly (no command text inspection),
+ * so they MUST be deferred to Channel 2's DOM-based inspection.
  */
 function getActiveCommands() {
+    // Filters active → disable Channel 1 entirely. Channel 2 handles everything.
+    if (cachedHasFilters) {
+        return [];
+    }
+
     let commands = [...ALL_ACCEPT_COMMANDS];
 
     if (!cachedAutoAcceptFileEdits) {
         commands = commands.filter(c => c !== 'antigravity.agent.acceptAgentStep');
-    }
-
-    if (cachedHasFilters) {
-        commands = commands.filter(c => !TERMINAL_COMMANDS.includes(c));
     }
 
     return commands;
