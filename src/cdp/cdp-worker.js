@@ -211,6 +211,7 @@ function openSocket(wsUrl) {
         ws.on('error', () => {
             clearTimeout(timeout);
             ws.removeAllListeners();
+            try { ws.close(); } catch (e) { }
             reject(new Error('socket error'));
         });
     });

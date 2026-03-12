@@ -15,29 +15,33 @@ let _memLogTimer = null;
 const MEM_LOG_PATH = path.join(require('os').tmpdir(), 'aa-memory.log');
 
 function startMemoryLogger() {
-    // Truncate old log on start
-    try { fs.writeFileSync(MEM_LOG_PATH, `--- AutoAccept Memory Log (PID ${process.pid}) ---\n`); } catch (e) { }
-    _memLogTimer = setInterval(() => {
+    // APPEND on start (don't truncate — preserves pre-crash data across OOM restarts)
+    try { fs.appendFileSync(MEM_LOG_PATH, `\n--- AutoAccept Memory Log (PID ${process.pid}) @ ${new Date().toISOString()} ---\n`); } catch (e) { }
+    // Immediate first snapshot (captures state even if OOM hits within 30s)
+    _writeMemLine();
+    _memLogTimer = setInterval(_writeMemLine, 30000); // Every 30s
+}
+
+function _writeMemLine() {
+    try {
+        // Cap at 1MB
         try {
-            // Cap at 1MB — truncate if exceeded
-            try {
-                const stat = fs.statSync(MEM_LOG_PATH);
-                if (stat.size > 1024 * 1024) {
-                    fs.writeFileSync(MEM_LOG_PATH, `--- AutoAccept Memory Log (PID ${process.pid}) [truncated] ---\n`);
-                }
-            } catch (e) { }
-            const mem = process.memoryUsage();
-            const heap = Math.round(mem.heapUsed / 1024 / 1024);
-            const rss = Math.round(mem.rss / 1024 / 1024);
-            const ext = Math.round((mem.external || 0) / 1024 / 1024);
-            const ab = Math.round((mem.arrayBuffers || 0) / 1024 / 1024);
-            const sessions = connectionManager ? connectionManager.sessions.size : 0;
-            const ignored = connectionManager ? connectionManager.ignoredTargets.size : 0;
-            const pending = connectionManager ? connectionManager._pendingIpc.size : 0;
-            const line = `${new Date().toISOString()} | heap=${heap}MB rss=${rss}MB ext=${ext}MB ab=${ab}MB | sessions=${sessions} ignored=${ignored} pending=${pending}\n`;
-            fs.appendFileSync(MEM_LOG_PATH, line);
+            const stat = fs.statSync(MEM_LOG_PATH);
+            if (stat.size > 1024 * 1024) {
+                fs.writeFileSync(MEM_LOG_PATH, `--- AutoAccept Memory Log (PID ${process.pid}) [truncated] ---\n`);
+            }
         } catch (e) { }
-    }, 30000); // Every 30s
+        const mem = process.memoryUsage();
+        const heap = Math.round(mem.heapUsed / 1024 / 1024);
+        const rss = Math.round(mem.rss / 1024 / 1024);
+        const ext = Math.round((mem.external || 0) / 1024 / 1024);
+        const ab = Math.round((mem.arrayBuffers || 0) / 1024 / 1024);
+        const sessions = connectionManager ? connectionManager.sessions.size : 0;
+        const ignored = connectionManager ? connectionManager.ignoredTargets.size : 0;
+        const pending = connectionManager ? connectionManager._pendingIpc.size : 0;
+        const line = `${new Date().toISOString()} | heap=${heap}MB rss=${rss}MB ext=${ext}MB ab=${ab}MB | sessions=${sessions} ignored=${ignored} pending=${pending}\n`;
+        fs.appendFileSync(MEM_LOG_PATH, line);
+    } catch (e) { }
 }
 
 function stopMemoryLogger() {
@@ -195,15 +199,23 @@ function startPolling() {
         pollRunning = true;
         try {
             // Re-read active commands each cycle so config changes take effect live.
-            // Inside try/catch: if getActiveCommands throws (e.g. extension host crash),
-            // the setTimeout chain still survives instead of silently dying.
             const cmds = getActiveCommands();
-            const timeoutPromise = new Promise(resolve => setTimeout(resolve, 3000));
+            let timerId;
+            const timeoutPromise = new Promise(resolve => { timerId = setTimeout(resolve, 3000); });
             const commandsPromise = Promise.allSettled(
                 cmds.map(cmd => vscode.commands.executeCommand(cmd))
             );
-            await Promise.race([commandsPromise, timeoutPromise]);
-            consecutiveErrors = 0; // Reset on success
+            const results = await Promise.race([commandsPromise, timeoutPromise]);
+            clearTimeout(timerId); // P1: prevent orphaned timer leak
+
+            // P0: Promise.allSettled NEVER throws; inspect results to detect failures
+            if (Array.isArray(results)) {
+                const allFailed = results.length > 0 && results.every(r => r.status === 'rejected');
+                if (allFailed) throw new Error('All commands rejected');
+            } else {
+                throw new Error('Command timeout');
+            }
+            consecutiveErrors = 0; // Reset only if at least one succeeded
         } catch (e) {
             consecutiveErrors++;
             if (consecutiveErrors <= 3 || consecutiveErrors % 10 === 0) {
@@ -213,12 +225,14 @@ function startPolling() {
             pollRunning = false;
         }
         if (isEnabled) {
+            // P2: Smart Sleep — use 5s interval when no active sessions (near-zero IPC when idle)
+            const isIdle = connectionManager && connectionManager.sessions.size === 0;
+            const baseInterval = isIdle ? 5000 : interval;
             // Exponential backoff with ±20% jitter on persistent failures (caps at 30s).
-            // Jitter desynchronizes multiple workspace instances after host recovery.
             const jitter = 0.8 + (Math.random() * 0.4);
             const backoff = consecutiveErrors > 0
-                ? Math.min(interval * Math.pow(2, consecutiveErrors - 1), 30000) * jitter
-                : interval;
+                ? Math.min(baseInterval * Math.pow(2, consecutiveErrors - 1), 30000) * jitter
+                : baseInterval;
             pollIntervalId = setTimeout(pollCycle, backoff);
         }
     }
@@ -353,30 +367,8 @@ else { Write-Output "NOT_FOUND" }
                     `✅ Shortcut ready! Restart Antigravity to activate AutoAccept.`,
                     'Restart Now'
                 ).then(action => {
-                    if (action === 'Restart Now' && lnkPath) {
-                        // Safe path encoding: Base64-encode the path to handle Unicode, spaces,
-                        // and special characters without brittle string escaping.
-                        const pathB64 = Buffer.from(lnkPath, 'utf16le').toString('base64');
-
-                        // Sleeper payload: decodes the Base64 path at runtime, waits 2s for 
-                        // single-instance lock release, then launches the shortcut.
-                        const sleeperScript = `$p=[System.Text.Encoding]::Unicode.GetString([System.Convert]::FromBase64String('${pathB64}'));Start-Sleep -Seconds 2;Start-Process -FilePath $p`;
-                        const b64Sleeper = Buffer.from(sleeperScript, 'utf16le').toString('base64');
-
-                        // WMI Escape Hatch: spawns sleeper under WmiPrvSE.exe, outside IDE's Job Object
-                        const wmiScript = `$si=([wmiclass]"Win32_ProcessStartup").CreateInstance();$si.ShowWindow=0;$cmd="powershell.exe -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${b64Sleeper}";([wmiclass]"Win32_Process").Create($cmd,$null,$si)`;
-                        const b64Wmi = Buffer.from(wmiScript, 'utf16le').toString('base64');
-
-                        log('[CDP] Triggering WMI escape hatch for restart...');
-                        cp.exec(`powershell -WindowStyle Hidden -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${b64Wmi}`,
-                            { windowsHide: true },
-                            (err) => {
-                                if (err) log(`[CDP] WMI trigger warning: ${err.message}`);
-                                vscode.commands.executeCommand('workbench.action.quit');
-                            }
-                        );
-                    } else if (action === 'Restart Now') {
-                        vscode.commands.executeCommand('workbench.action.quit');
+                    if (action === 'Restart Now') {
+                        vscode.commands.executeCommand('workbench.action.reloadWindow');
                     }
                 });
             } else {

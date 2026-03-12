@@ -170,15 +170,14 @@ class ConnectionManager {
     }
 
     _killWorker() {
-        if (this._worker) {
-            try { this._worker.postMessage({ type: 'shutdown' }); } catch (e) { }
+        const workerRef = this._worker;
+        this._worker = null;
+        if (workerRef) {
+            try { workerRef.postMessage({ type: 'shutdown' }); } catch (e) { }
             setTimeout(() => {
-                if (this._worker) {
-                    try { this._worker.terminate(); } catch (e) { }
-                }
+                try { workerRef.terminate(); } catch (e) { }
             }, 1000);
         }
-        this._worker = null;
     }
 
     // P2: setTimeout debounce idle kill (not setInterval)
@@ -530,7 +529,7 @@ class ConnectionManager {
 
     _pingPort(port) {
         return new Promise((resolve) => {
-            const req = http.get({ hostname: '127.0.0.1', port, path: '/json/version', timeout: 800 }, (res) => {
+            const req = http.get({ hostname: '127.0.0.1', port, path: '/json/version', timeout: 800, agent: false }, (res) => {
                 res.on('data', () => {});
                 res.on('end', () => resolve(true));
             });
@@ -541,7 +540,7 @@ class ConnectionManager {
 
     _getTargetList(port) {
         return new Promise((resolve) => {
-            const req = http.get({ hostname: '127.0.0.1', port, path: '/json', timeout: 2000 }, (res) => {
+            const req = http.get({ hostname: '127.0.0.1', port, path: '/json', timeout: 2000, agent: false }, (res) => {
                 let data = '';
                 res.on('data', chunk => data += chunk);
                 res.on('end', () => {

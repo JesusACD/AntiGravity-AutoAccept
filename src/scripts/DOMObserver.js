@@ -173,7 +173,7 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                 for (var lt = 0; lt < texts.length; lt++) {
                     if (nodeText.indexOf(texts[lt]) !== -1) {
                         if (!window.__AA_DIAG) window.__AA_DIAG = [];
-                        window.__AA_DIAG.push({ action: 'SKIP_LONG_TEXT', matched: texts[lt], len: nodeText.length, preview: nodeText.substring(0, 60) });
+                        if (window.__AA_DIAG.length < 50) window.__AA_DIAG.push({ action: 'SKIP_LONG_TEXT', matched: texts[lt], len: nodeText.length, preview: nodeText.substring(0, 60) });
                         break;
                     }
                 }
@@ -214,7 +214,7 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                         clickable.classList.contains('loading') || clickable.querySelector('.codicon-loading') ||
                         clickable.getAttribute('data-aa-blocked')) {
                         if (!window.__AA_DIAG) window.__AA_DIAG = [];
-                        window.__AA_DIAG.push({ action: 'SKIP_DISABLED', matched: text, text: nodeText.substring(0, 40), tag: tag2 });
+                        if (window.__AA_DIAG.length < 50) window.__AA_DIAG.push({ action: 'SKIP_DISABLED', matched: text, text: nodeText.substring(0, 40), tag: tag2 });
                         continue;
                     }
 
@@ -227,7 +227,7 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                     var lastClick = clickCooldowns[btnKey] || 0;
                     if (lastClick && (Date.now() - lastClick < cooldown)) {
                         if (!window.__AA_DIAG) window.__AA_DIAG = [];
-                        window.__AA_DIAG.push({ action: 'SKIP_COOLDOWN', matched: text, remaining: Math.round((cooldown - (Date.now() - lastClick)) / 1000) + 's' });
+                        if (window.__AA_DIAG.length < 50) window.__AA_DIAG.push({ action: 'SKIP_COOLDOWN', matched: text, remaining: Math.round((cooldown - (Date.now() - lastClick)) / 1000) + 's' });
                         continue;
                     }
                     best = { node: clickable, matchedText: text, priority: t };
@@ -397,7 +397,7 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                         var blockKey = _domPath(btn) + ':' + (btn.textContent || '').trim().toLowerCase().substring(0, 30);
                         clickCooldowns[blockKey] = Date.now() + (15000 - COOLDOWN_MS);
                         if (!window.__AA_DIAG) window.__AA_DIAG = [];
-                        window.__AA_DIAG.push({ action: 'BLOCKED', time: Date.now(), matched: matchedText, cmd: (cmdText || '').substring(0, 60) });
+                        if (window.__AA_DIAG.length < 50) window.__AA_DIAG.push({ action: 'BLOCKED', time: Date.now(), matched: matchedText, cmd: (cmdText || '').substring(0, 60) });
                         continue; // Re-scan to find next button
                     }
                 }
@@ -418,7 +418,7 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                 } catch(e) {}
                 if (!window.__AA_DIAG) window.__AA_DIAG = [];
                 var diagCmdText = extractCommandText(btn);
-                window.__AA_DIAG.push({ action: 'CLICKED', time: Date.now(), matched: matchedText, cmd: diagCmdText ? diagCmdText.substring(0, 80) : 'NULL', url: (location.href || '').substring(0, 60), near: nearbyText.substring(0, 60) });
+                if (window.__AA_DIAG.length < 50) window.__AA_DIAG.push({ action: 'CLICKED', time: Date.now(), matched: matchedText, cmd: diagCmdText ? diagCmdText.substring(0, 80) : 'NULL', url: (location.href || '').substring(0, 60), near: nearbyText.substring(0, 60) });
 
                 // ═══ RETRY CIRCUIT BREAKER ═══
                 // Prevents infinite loops when the model hits context limits or network
@@ -436,7 +436,7 @@ function buildDOMObserverScript(customTexts, blockedCommands, allowedCommands, a
                     });
                     if (window.__AA_RECOVERY_TS.length >= 3) {
                         if (!window.__AA_DIAG) window.__AA_DIAG = [];
-                        window.__AA_DIAG.push({ action: 'CIRCUIT_BREAKER', time: now, matched: matchedText, count: window.__AA_RECOVERY_TS.length });
+                        if (window.__AA_DIAG.length < 50) window.__AA_DIAG.push({ action: 'CIRCUIT_BREAKER', time: now, matched: matchedText, count: window.__AA_RECOVERY_TS.length });
                         return 'blocked:circuit_breaker';
                     }
                     window.__AA_RECOVERY_TS.push(now);
