@@ -19,6 +19,13 @@ function startMemoryLogger() {
     try { fs.writeFileSync(MEM_LOG_PATH, `--- AutoAccept Memory Log (PID ${process.pid}) ---\n`); } catch (e) { }
     _memLogTimer = setInterval(() => {
         try {
+            // Cap at 1MB — truncate if exceeded
+            try {
+                const stat = fs.statSync(MEM_LOG_PATH);
+                if (stat.size > 1024 * 1024) {
+                    fs.writeFileSync(MEM_LOG_PATH, `--- AutoAccept Memory Log (PID ${process.pid}) [truncated] ---\n`);
+                }
+            } catch (e) { }
             const mem = process.memoryUsage();
             const heap = Math.round(mem.heapUsed / 1024 / 1024);
             const rss = Math.round(mem.rss / 1024 / 1024);
@@ -384,7 +391,8 @@ else { Write-Output "NOT_FOUND" }
 // ─── Activation ───────────────────────────────────────────────────────
 function activate(context) {
     outputChannel = vscode.window.createOutputChannel('AntiGravity AutoAccept');
-    log('Extension activating (v3.9.9)');
+    const { version } = require('../package.json');
+    log(`Extension activating (v${version})`);
     startMemoryLogger();
     log(`[MEM] Memory log: ${MEM_LOG_PATH}`);
 
